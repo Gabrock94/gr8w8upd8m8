@@ -9,11 +9,17 @@ You only need to install `python-bluez` or `python-bluetooth` package.
 LICENSE LGPL <http://www.gnu.org/licenses/lgpl.html>
         (c) Nedim Jackman 2008 (c) Pierrick Koch 2016
 """
+
 import time
 import logging
 import collections
 import bluetooth
-import matplotlib.pyplot as plt
+import multiprocessing
+import asyncio
+import aiofiles
+
+OUTPUTFILE = '/home/giulio/Desktop/output'+str(time.time()).replace('.','')+'.csv'
+
 # Wiiboard Parameters
 CONTINUOUS_REPORTING    = b'\x04'
 COMMAND_LIGHT           = b'\x11'
@@ -47,6 +53,7 @@ logger.setLevel(logging.INFO) # or DEBUG
 
 b2i = lambda b: int(b.hex(), 16)
 
+
 def discover(duration=6, prefix=BLUETOOTH_NAME):
     logger.info("Scan Bluetooth devices for %i seconds...", duration)
     devices = bluetooth.discover_devices(duration=duration, lookup_names=True)
@@ -66,6 +73,7 @@ class Wiiboard:
         if address is not None:
             self.connect(address)
             
+
     def connect(self, address):
         logger.info("Connecting to %s", address)
         self.controlsocket.connect((address, 0x11))
@@ -111,24 +119,28 @@ class Wiiboard:
         
     def get_data(self):
         data = self.receivesocket.recv(25)
-        
+
         if(data[1] == 50):
             #sensors data
             # print(data)
             sensors, weight = self.get_mass(data)
-            # print(sensors, weight)
+            timestamp = time.time()
+            print(sensors, weight)
             if(SAVE == True):
-                with open('/home/giulio/Desktop/output.csv', 'a') as f:
-                    f.write(','.join([str(x) for x in sensors.values()]) + ',')
-                    f.write(','.join([str(weight), str(time.time())]) + '\n')
-                    
+                asyncio.run(self.savetofile([sensors.values(), weight, timestamp]))
         elif(data[1] == 33):
             self.calibrate(data)
                 #calibration
             # return(data)
             # self.close()
     
-    
+    async def savetofile(self, bufferdata):
+        if(len(bufferdata) > 0 ):
+            async with aiofiles.open(OUTPUTFILE, mode='a+') as f_out:
+                line = ','.join([str(x) for x in bufferdata[0]]) + ',' + ','.join([str(bufferdata[1]), str(bufferdata[2])]) + '\n'
+                await f_out.write(line)         
+
+        
     def check_button(self, state):
         if state == BUTTON_DOWN_MASK:
             if not self.button_down:
@@ -167,9 +179,8 @@ class Wiiboard:
         logger.info("Starting the receive loop")
         
         while self.running and self.receivesocket:
-            
             self.reporting()
-            
+
     def on_status(self):
         self.reporting() # Must set the reporting type after every status report
         logger.info("Status: battery: %.2f%% light: %s", self.battery*100.0,
@@ -228,9 +239,18 @@ class WiiboardPrint(WiiboardSampling):
                 return self.close()
             self.light(0)
             time.sleep(T_SLEEP)
-
+def stop():
+    proc.terminate()
+    
 if __name__ == '__main__':
-    import sys
     address = '00:1F:C5:A9:6B:E4'
     wbb = WiiboardPrint(address)
-    wbb.loop()
+    # wbb.loop()
+    with open(OUTPUTFILE, 'w') as f:
+                f.write('top_right,bottom_right,top_left,bottom_left,weight,time\n')
+                        
+    proc = multiprocessing.Process(target=wbb.loop, args=())
+    proc.start()
+    time.sleep(10)
+    stop()
+    
